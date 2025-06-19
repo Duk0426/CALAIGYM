@@ -1,41 +1,64 @@
-// app/api/scan/route.ts
-
 import { NextRequest, NextResponse } from "next/server";
 import axios from "axios";
 
-export async function POST(request: NextRequest) {
-  const { imageBase64 } = await request.json();
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "10mb",
+    },
+  },
+};
 
-  if (!imageBase64) {
-    return NextResponse.json(
-      { error: "No imageBase64 provided" },
-      { status: 400 }
-    );
-  }
-
+export async function POST(req: NextRequest) {
   try {
-    const base64Data = imageBase64.split(",")[1] ?? imageBase64;
+    const { imageBase64 } = await req.json();
 
+    if (!imageBase64) {
+      return NextResponse.json({ error: "No image provided" }, { status: 400 });
+    }
+
+    // Extract base64 data (remove data URL prefix if present)
+    const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+
+    if (!process.env.HUGGINGFACE_API_KEY) {
+      throw new Error("Hugging Face API key not configured");
+    }
+
+    // Using the correct and available TrOCR model
     const response = await axios.post(
-      "https://api-inference.huggingface.co/pipeline/ocr",
+      "https://api-inference.huggingface.co/models/microsoft/trocr-large-printed",
       { inputs: base64Data },
       {
         headers: {
           Authorization: `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
           "Content-Type": "application/json",
         },
+        timeout: 60000, // 60 second timeout
       }
     );
 
-    return NextResponse.json(response.data);
+    // Handle response
+    if (!response.data || typeof response.data !== "object") {
+      throw new Error("Invalid API response format");
+    }
+
+    const text = response.data.generated_text || "No text found";
+    return NextResponse.json({ text });
   } catch (error: any) {
-    console.error(
-      "Hugging Face OCR API error:",
-      error.response?.data || error.message
-    );
+    console.error("OCR API Error:", {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+      stack: error.stack,
+    });
+
     return NextResponse.json(
-      { error: "Failed to scan image" },
-      { status: 500 }
+      {
+        error: "OCR_FAILED",
+        message: error.response?.data?.error || error.message,
+        status: error.response?.status,
+      },
+      { status: error.response?.status || 500 }
     );
   }
 }
